@@ -149,6 +149,68 @@ func ParseReleaseFile(reader io.Reader, distPrefix string) (DistributionMeta, ma
 	return meta, files
 }
 
+// Get a list of Packages files that match the criteria
+// TODO: also filter by compression format?
+func (dist *Distribution) PackagesFiles(components []string, architectures []string) []transport.VerifiedFile {
+	matches := make([]transport.VerifiedFile, 0)
+
+	for _, vf := range dist.Indexes {
+		component := ""
+		for _, c := range components {
+			prefix := fmt.Sprintf("dists/%s/%s", dist.Name, c)
+			if strings.HasPrefix(vf.Path, prefix) {
+				component = c
+				break
+			}
+		}
+		if component == "" {
+			continue
+		}
+
+		//pattern := fmt.Sprintf("^dists\\/%s\\/%s/(binary-.*\\/Packages|source\\/Sources)(|\\.gz|\\xz|\\bz2)$", dist.Name, component)
+		//if match, _ := regexp.MatchString(pattern, "peach"); !match {
+		//	continue
+		//}
+
+		// TODO: support .xzip files
+		if strings.HasSuffix(vf.Path, ".xz") {
+			continue
+		}
+
+		// TODO: remove this incredible hack
+		if !strings.Contains(vf.Path, "binary-") {
+			continue
+		}
+
+		// TODO: remove this incredible hack
+		if strings.Contains(vf.Path, "debian-installer") {
+			continue
+		}
+
+		// TODO: remove this incredible hack
+		if !strings.HasSuffix(vf.Path, ".gz") {
+			continue
+		}
+
+		architecture := ""
+		for _, a := range architectures {
+			if strings.Contains(vf.Path, a) {
+				architecture = a
+				break
+			}
+		}
+
+		if architecture != "" {
+			matches = append(matches, vf)
+		}
+
+		// TODO: order by preferred extension, or filter?
+		// TODO: only return the best of plain/gz/bz/xz
+	}
+
+	return matches
+}
+
 //func (dist *Distribution) Releases() (DistributionMeta, iter.Iterator[Release]) {
 //	//http://archive.ubuntu.com/ubuntu/dists/bionic-updates/Release
 //	resp, err := http.Get(dist.Url.String() + "/Release")

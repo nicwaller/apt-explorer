@@ -5,57 +5,40 @@ import (
 	"apt-explorer/lib/apt/kvstore"
 	"apt-explorer/lib/apt/transport"
 	"apt-explorer/lib/log"
+	"compress/gzip"
 	"fmt"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
 	"text/template"
-	"time"
 )
 
 func main() {
-	//serve()
+	serve()
 
 	arc, err := apt.UseArchiveHttp("http://archive.ubuntu.com/ubuntu")
-	//arc, err := apt.UseArchiveFilesystem("./repo")
+	catch(err)
+	ubuntuArchiveCache := transport.UseCache(arc, "jammy")
+	jammy, err := apt.UseDistribution(ubuntuArchiveCache, "jammy")
 	catch(err)
 
-	trn := transport.Fetcher(arc)
-	trn = transport.UseCache(trn)
-
-	jammy, err := apt.UseDistribution(trn, "jammy")
-	catch(err)
-
-	fmt.Printf("Distribution: %v\n", jammy.Name)
-
-	log.Debug("Let's try downloading all the index files!")
 	// TODO: there are many files to download. I'll need to use goroutines and workers.
 	// and maybe prioritize which files get downloaded.
 
-	keys := make([]string, 0)
-	for k, _ := range jammy.Indexes {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	keys = keys[2:20]
-	for i, k := range keys {
-		vf := jammy.Indexes[k]
-		log.Debug("%d/%d", i, len(jammy.Indexes))
-		i++
-		//log.Debug("Considering index file %s", k)
-		_ = k
-
-		z, err := trn.Fetch(vf)
-		_, _ = z, err
-		//catch(err)
-
-		//x, err := io.ReadAll(z)
-		//catch(err)
-
-		//fmt.Printf("Read bytes = %d\n", len(x))
-
-		time.Sleep(50 * time.Millisecond)
+	components := []string{"main"}
+	architectures := []string{"amd64"}
+	for _, vf := range jammy.PackagesFiles(components, architectures) {
+		fmt.Println(vf)
+		rr, err := ubuntuArchiveCache.Fetch(vf)
+		fmt.Println(err)
+		gzr, _ := gzip.NewReader(rr)
+		err = kvstore.Parse(gzr, func(block kvstore.Block) {
+			fmt.Println(block.SingleValues["Package"])
+		})
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
 	}
 
 	//
@@ -75,6 +58,37 @@ func main() {
 func index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Location", "/search")
 	w.WriteHeader(302)
+}
+
+// FIXME: this entire function is hardcoding and hacks
+func search(needle string, archive string, dist string, component string, arch string) []kvstore.Block {
+	arc, err := apt.UseArchiveHttp(archive)
+	catch(err)
+	ubuntuArchiveCache := transport.UseCache(arc, dist)
+	jammy, err := apt.UseDistribution(ubuntuArchiveCache, dist)
+	catch(err)
+
+	components := []string{component}
+	architectures := []string{arch}
+
+	matches := make([]kvstore.Block, 0)
+	for _, vf := range jammy.PackagesFiles(components, architectures) {
+		fmt.Println(vf)
+		rr, err := ubuntuArchiveCache.Fetch(vf)
+		fmt.Println(err)
+		gzr, _ := gzip.NewReader(rr)
+		err = kvstore.Parse(gzr, func(block kvstore.Block) {
+			if strings.Contains(block.SingleValues["Package"], needle) {
+				matches = append(matches, block)
+			}
+		})
+		if err != nil {
+			log.Error("%v", err)
+			return matches
+		}
+	}
+
+	return matches
 }
 
 func searchPage(w http.ResponseWriter, r *http.Request) {
@@ -99,13 +113,14 @@ func searchPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
 	requestedPackage := r.URL.Query().Get("q")
-	//requestedPackage := r.FormValue("package")
-	pqFile := "sources.pq"
-	matches, err := kvstore.QueryParquet(pqFile, requestedPackage)
-	if err != nil {
-		w.WriteHeader(500)
-		return
-	}
+
+	// the other way of searching
+	//pqFile := "sources.pq"
+	//matches, _ := kvstore.QueryParquet(pqFile, requestedPackage)
+
+	// the modern way
+	matches := search(requestedPackage, "http://archive.ubuntu.com/ubuntu", "jammy", "main", "amd64")
+
 	_, _ = fmt.Fprintln(w, "<pre>")
 	t.Execute(w, matches)
 	//for _, m := range matches {

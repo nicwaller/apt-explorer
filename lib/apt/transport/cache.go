@@ -11,9 +11,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
-	"io/fs"
 	"os"
 	"path"
+	"strings"
 	"time"
 )
 
@@ -29,58 +29,59 @@ func init() {
 
 type FetchCache struct {
 	originalFetcher Fetcher
+	cacheKey        string // release files are not content-addressed, so they need to be kept separate
 }
 
 //goland:noinspection GoUnusedExportedFunction
-func UseCache(f Fetcher) Fetcher {
+func UseCache(f Fetcher, cacheKey string) Fetcher {
 	return FetchCache{
 		originalFetcher: f,
+		cacheKey:        cacheKey,
 	}
 }
 
-//func (cache FetchCache) Fetch(f VerifiedFile) (string, error) {
-//	reader, err := cache.Fetch(f)
-//	if err != nil {
-//		return "", err
-//	}
-//
-//	b, err := io.ReadAll(reader)
-//	if err != nil {
-//		return "", err
-//	}
-//
-//	return string(b), nil
-//}
+func (cache FetchCache) expectedCachePaths(vf VerifiedFile) []string {
+	paths := make([]string, 0)
 
-func (cache FetchCache) Fetch(f VerifiedFile) (io.Reader, error) {
-	// First, look in the well-known cache places
-	//log.Debug("Looking for %s in cache", f.Path)
-	if len(f.Checksums) == 0 {
-		log.Debug(" No checksums provided for %s; will need to go by name or path", f.Path)
-		return cache.originalFetcher.Fetch(f)
+	if strings.HasSuffix(vf.Path, "/Release") {
+		expectedPath := path.Join(cachePath, cache.cacheKey, "Release", strings.ReplaceAll(vf.Path, "/", "-"))
+		paths = append(paths, expectedPath)
 	}
-	for _, algo := range PreferredAlgorithms() {
-		if hash, found := f.Checksums[algo]; found {
-			expectedPath := path.Join(cachePath, "by-hash", AlgoToString(algo), hex.EncodeToString(hash))
-			_, err := os.Stat(expectedPath)
-			if errors.Is(err, fs.ErrNotExist) {
-				//log.Debug(" Not found: %s", expectedPath)
-				continue
-			} else {
-				//log.Debug(" Found cached file: %s", expectedPath)
-				cacheReader, err := os.Open(expectedPath)
-				// FIXME: do I need to close the file handle with a defer? if not here, then where?
-				if err != nil {
-					return cacheReader, nil
-				}
-			}
+
+	for algo, hash := range vf.Checksums {
+		algoStr := AlgoToString(algo)
+		hashStr := hex.EncodeToString(hash)
+		expectedPath := path.Join(cachePath, "by-hash", algoStr, hashStr)
+		paths = append(paths, expectedPath)
+	}
+
+	return paths
+}
+
+func (cache FetchCache) findLocalCacheFile(vf VerifiedFile) (string, bool) {
+	for _, expectedPath := range cache.expectedCachePaths(vf) {
+		_, err := os.Stat(expectedPath)
+		if err == nil {
+			return expectedPath, true
 		}
 	}
-	//log.Debug("No cached version available for \"%s\" (%d hashes)", f.Path, len(f.Checksums))
+	return "", false
+}
 
-	if IsInNegativeCache(f.Path) {
-		log.Warning("Skipping " + f.Path + " (negative cache hit)")
-		return nil, errors.New("Negative cache hit for " + f.Path)
+func (cache FetchCache) Fetch(f VerifiedFile) (io.Reader, error) {
+	if cacheHitFile, found := cache.findLocalCacheFile(f); found {
+		log.Debug("Fetch() - positive cache hit! %s", cacheHitFile)
+		cacheReader, openErr := os.Open(cacheHitFile)
+		// FIXME: do I need to close the file handle with a defer? if not here, then where?
+		if openErr != nil {
+			return nil, openErr
+		}
+		return cacheReader, nil
+	} else if IsInNegativeCache(f.Path) {
+		log.Debug("Fetch() - negative cache hit! %s", f.Path)
+		return nil, errors.New("negative cache hit")
+	} else {
+		log.Debug("Fetch() - cache miss! %v", f.Checksums)
 	}
 
 	reader, err := cache.originalFetcher.Fetch(f)
@@ -114,6 +115,17 @@ func (cache FetchCache) Fetch(f VerifiedFile) (io.Reader, error) {
 	}
 	_ = size
 	//log.Info("Downloaded file of %d bytes", size)
+
+	if strings.HasSuffix(f.Path, "/Release") {
+		// TODO: when should I evict the Release cache? I really need Redis for this.
+		expectedPath := path.Join(cachePath, cache.cacheKey, "Release", strings.ReplaceAll(f.Path, "/", "-"))
+		_ = os.MkdirAll(path.Join(cachePath, cache.cacheKey, "Release"), 0755)
+		err2 := os.Link(file.Name(), expectedPath)
+		if err2 != nil {
+			log.Error("%v", err2)
+			log.Warning("Failed creating hard link for Release cache")
+		}
+	}
 
 	vff, err := addFileToCache(file.Name(), f.Checksums, false) // TODO: yes, unlink
 	if err != nil {

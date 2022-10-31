@@ -30,9 +30,10 @@ const (
 )
 
 func Tokenize(input io.Reader, gotToken func(kind TokenType, tok []byte), gotError func(e error)) {
-	token := make([]byte, 4096) // some of those dependency chains can be quite large
+	// I have seen tokens longer than 8192. really. -NW
+	token := make([]byte, 16384) // some of those dependency chains can be quite large
 	tokI := 0
-	buf := make([]byte, 4096)
+	buf := make([]byte, 16384)
 	state := sBegin
 
 	// TODO: maybe report row/col where error occurred, include some context?
