@@ -1,0 +1,14 @@
+# JetBrains IDEs
+.idea/*
+
+# macOS
+.DS_Store
+
+# cached copies of files from Apt repos
+samples
+
+# A sample repo
+repo
+
+# build artifact produced by go build
+apt-explorer

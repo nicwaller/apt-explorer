@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Package Search</title>
+    <script>
+        function search() {
+            // TODO: debounce this event
+            const input = document.getElementById('packageInput');
+
+            // TODO: encode this properly. nicer request.
+            fetch('./search?q=' + input.value, {method: "POST"})
+                .then(
+                    function(response) {
+                        if (response.status !== 200) {
+                            console.log('Looks like there was a problem. Status Code: ' +
+                                response.status);
+                            return;
+                        }
+                        response.text().then((data) => {
+                            document.getElementById('results').innerHTML = data;
+                        })
+                        // response.json().then(function(data) {
+                        //     console.log(data);
+                        // });
+                    }
+                )
+                .catch(function(err) {
+                    console.log('Fetch Error :-S', err);
+                });
+        }
+        function populateForm() {
+            const urlParams = new URLSearchParams(window.location.search);
+            document.getElementById('packageInput').value = urlParams.get('q');
+            search();
+        }
+    </script>
+</head>
+<body onload="populateForm()">
+
+<form>
+<!--<form method="post" action="/search">-->
+    <label>
+        Package: <input id="packageInput" type="text" name="q" onkeyup="search()" autofocus>
+    </label>
+    <input type="submit">
+</form>
+
+<div id="results">
+    TBD
+</div>
+
+</body>
+</html>
